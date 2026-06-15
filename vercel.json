@@ -1,11 +1,10 @@
 {
   "version": 2,
   "builds": [
-    { "src": "api/*.py", "use": "@vercel/python" },
-    { "src": "public/**", "use": "@vercel/static" }
+    { "src": "api/analyze.py", "use": "@vercel/python" }
   ],
   "routes": [
-    { "src": "/api/(.*)", "dest": "/api/$1" },
+    { "src": "/api/analyze", "dest": "/api/analyze.py" },
     { "src": "/(.*)", "dest": "/public/$1" }
   ]
 }
