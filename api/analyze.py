@@ -2,24 +2,14 @@ from http.server import BaseHTTPRequestHandler
 import json
 import urllib.request
 import urllib.parse
-import re
 
-CITATION_SITES = [
-    "google.com/maps", "yelp.com", "facebook.com", "linkedin.com",
-    "yellowpages.com", "bing.com/maps", "foursquare.com", "manta.com",
-    "bbb.org", "trustpilot.com", "tripadvisor.com", "hotfrog.com",
-    "superpages.com", "citysearch.com", "mapquest.com", "thumbtack.com",
-    "bark.com", "clutch.co", "g2.com", "houzz.com", "angi.com",
-    "brownbook.net", "showmelocal.com", "cylex.us.com", "n49.com",
-]
-
-CITATION_NAMES = {
-    "google.com/maps": "Google Business Profile",
+CITATION_SITES = {
+    "google.com": "Google Business Profile",
     "yelp.com": "Yelp",
     "facebook.com": "Facebook Business",
     "linkedin.com": "LinkedIn",
     "yellowpages.com": "Yellow Pages",
-    "bing.com/maps": "Bing Places",
+    "bingplaces.com": "Bing Places",
     "foursquare.com": "Foursquare",
     "manta.com": "Manta",
     "bbb.org": "Better Business Bureau",
@@ -27,7 +17,6 @@ CITATION_NAMES = {
     "tripadvisor.com": "TripAdvisor",
     "hotfrog.com": "Hotfrog",
     "superpages.com": "Superpages",
-    "citysearch.com": "Citysearch",
     "mapquest.com": "MapQuest",
     "thumbtack.com": "Thumbtack",
     "bark.com": "Bark.com",
@@ -35,118 +24,114 @@ CITATION_NAMES = {
     "g2.com": "G2",
     "houzz.com": "Houzz",
     "angi.com": "Angi",
-    "brownbook.net": "Brownbook",
     "showmelocal.com": "ShowMeLocal",
+    "brownbook.net": "Brownbook",
     "cylex.us.com": "Cylex",
     "n49.com": "n49",
+    "nextdoor.com": "Nextdoor",
 }
 
+SERPAPI_KEY = "YOUR_SERPAPI_KEY"  # Free: serpapi.com
+
 def get_domain(url):
-    url = url.replace("https://", "").replace("http://", "").replace("www.", "")
+    url = url.replace("https://","").replace("http://","").replace("www.","")
     return url.split("/")[0]
 
-def search_google(query, num=5):
-    """Search Google and return result URLs"""
+def serpapi_search(query, num=10):
     try:
-        encoded = urllib.parse.quote(query)
-        req_url = f"https://www.google.com/search?q={encoded}&num={num}"
-        req = urllib.request.Request(req_url, headers={
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        params = urllib.parse.urlencode({
+            "q": query,
+            "num": num,
+            "api_key": SERPAPI_KEY,
+            "engine": "google"
         })
-        with urllib.request.urlopen(req, timeout=8) as resp:
-            html = resp.read().decode("utf-8", errors="ignore")
-        urls = re.findall(r'href="(https://[^"]+)"', html)
-        clean = []
-        skip = ["google.", "youtube.", "accounts.", "support.", "maps.google"]
-        for u in urls:
-            if not any(s in u for s in skip) and u not in clean:
-                clean.append(u)
-        return clean[:num]
+        req = urllib.request.Request(
+            f"https://serpapi.com/search.json?{params}",
+            headers={"User-Agent": "Mozilla/5.0"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read())
+        results = []
+        for r in data.get("organic_results", []):
+            link = r.get("link","")
+            title = r.get("title","")
+            snippet = r.get("snippet","")
+            if link:
+                results.append({"url": link, "title": title, "snippet": snippet})
+        return results
     except Exception as e:
         return []
 
-def find_citations(business_name, domain):
-    """Find where a business has citations"""
-    found = []
-    query = f'"{business_name}" OR site:*.{domain}'
-    results = search_google(query + " business listing directory", 20)
-    
-    for result_url in results:
-        for site in CITATION_SITES:
-            if site in result_url and CITATION_NAMES.get(site) not in [f["name"] for f in found]:
-                found.append({
-                    "name": CITATION_NAMES.get(site, site),
-                    "url": result_url,
-                    "site": site
-                })
-    return found
-
 def find_competitors(site_url, niche, location):
-    """Find real competitors via Google search"""
     domain = get_domain(site_url)
     query = f'{niche} {location} -site:{domain}'
-    results = search_google(query, 8)
-    
+    results = serpapi_search(query, 8)
     competitors = []
     seen = set()
-    for url in results:
-        d = get_domain(url)
-        if d not in seen and domain not in d:
+    for r in results:
+        d = get_domain(r["url"])
+        if d not in seen and domain not in d and len(d) > 3:
             seen.add(d)
             competitors.append({
                 "domain": d,
-                "url": url,
+                "url": r["url"],
+                "title": r.get("title",""),
                 "citations": [],
                 "citationCount": 0
             })
     return competitors[:5]
 
+def find_citations(domain):
+    biz_name = domain.split(".")[0]
+    query = f'"{biz_name}" business listing'
+    results = serpapi_search(query, 15)
+    found = []
+    seen_names = set()
+    for r in results:
+        url = r["url"]
+        for site, name in CITATION_SITES.items():
+            if site in url and name not in seen_names:
+                seen_names.add(name)
+                found.append({"name": name, "url": url})
+    return found
+
 class handler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
         self.send_response(200)
-        self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "POST, OPTIONS")
-        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.send_header("Access-Control-Allow-Methods","POST,OPTIONS")
+        self.send_header("Access-Control-Allow-Headers","Content-Type")
         self.end_headers()
 
     def do_POST(self):
         try:
-            length = int(self.headers.get("Content-Length", 0))
+            length = int(self.headers.get("Content-Length",0))
             body = json.loads(self.rfile.read(length))
-            site_url = body.get("url", "")
-            niche = body.get("niche", "business")
-            location = body.get("location", "")
+            site_url = body.get("url","")
+            niche = body.get("niche","business")
+            location = body.get("location","")
+
+            if SERPAPI_KEY == "YOUR_SERPAPI_KEY":
+                raise Exception("SERPAPI_KEY nahi daali — analyze.py mein key add karo")
 
             domain = get_domain(site_url)
-
-            # Step 1: Find competitors
             competitors = find_competitors(site_url, niche, location)
-
-            # Step 2: For each competitor find citations
             for comp in competitors:
-                biz_name = comp["domain"].split(".")[0]
-                citations = find_citations(biz_name, comp["domain"])
+                citations = find_citations(comp["domain"])
                 comp["citations"] = citations
                 comp["citationCount"] = len(citations)
 
-            result = {
-                "domain": domain,
-                "competitors": competitors,
-                "totalFound": len(competitors)
-            }
-
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps(result).encode())
-
+            result = {"domain": domain, "competitors": competitors, "totalFound": len(competitors)}
+            self._respond(200, result)
         except Exception as e:
-            self.send_response(500)
-            self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
-            self.end_headers()
-            self.wfile.write(json.dumps({"error": str(e)}).encode())
+            self._respond(500, {"error": str(e)})
+
+    def _respond(self, code, data):
+        self.send_response(code)
+        self.send_header("Content-Type","application/json")
+        self.send_header("Access-Control-Allow-Origin","*")
+        self.end_headers()
+        self.wfile.write(json.dumps(data).encode())
 
     def log_message(self, format, *args):
         pass
